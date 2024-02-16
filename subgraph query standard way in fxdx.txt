@@ -1,0 +1,141 @@
+
+ 
+import { gql } from "@apollo/client";
+import { getGraphClient } from "domain/referrals";
+import { BigNumber } from "ethers";
+import { getLeaderBoardActionsClient } from "lib/subgraph";
+
+const blackListAddress = [
+    "0x0aa521427cf5a815a3b4b5acdcc531a477436457",
+    "0xeca8f40f98abde3195f3120e7e9fb0a85cf3417e",
+    "0x57cf749ed1f6de91171b44cc660516fe5362f5b4",
+    "0xf166b01e8e29488b3f29de3a202134fc5cae82a1",
+    "0x1a8175e9740bbD198F51728Be3452D3aB31E917D"
+];
+
+const userTradesStatsQuery = gql`
+  query UserTradesStats($period: String, $skip: Int, $first: Int) {
+    userTradesStats(where:{and:[{period:$period} { marginVolume_gt:0 }]} orderBy:timestamp,orderDirection:desc,skip:$skip,first:$first) {
+      account
+      marginVolume
+    }
+  }
+`;
+
+export const getUserTrades = async (chainId, period, skip, first) => {
+    if (!chainId) {
+        return [];
+    }
+
+    try {
+        const client = getLeaderBoardActionsClient(chainId);
+        const data = await client.query({
+            query: userTradesStatsQuery,
+            variables: {
+                period: period,
+                skip: skip,
+                first: first
+            }
+        });
+
+        const allUsersData = data.data.userTradesStats;
+
+        const filteredUserData = allUsersData.filter((user) => {
+            return !blackListAddress.includes(user.account);
+        });
+
+
+        return filteredUserData;
+
+    } catch (err) {
+        console.log("Error fetching data: ", err);
+    }
+};
+
+
+export const getLeaderBoardData = async (chainId, period, skip, first) => {
+    if (!chainId) {
+        return [];
+    }
+
+    try {
+        const userTradesData = await getUserTrades(chainId, period, skip, first);
+        console.log(userTradesData);
+
+        let data = [];
+        for (let userTrade of userTradesData) {
+            const { account, marginVolume } = userTrade
+            console.log(account, marginVolume);
+            const totalVolume = await getReferralData(chainId, account, period, 0);
+            data.push({
+                ...userTrade,
+                totalVolume
+            })
+        }
+
+        return data;
+        
+    } catch (err) {
+        console.log("Error fetching data: ", err);
+    }
+
+}
+
+export const getReferralData = async (chainId, account, period, timestamp) => {
+
+    const referralDataQuery = gql`
+      query referralData($account: String, $timestamp: Int, $period: String) {
+        referrerTotalStats: referrerStats(
+            orderBy: volume
+            orderDirection: desc
+            where:{period:$period, referrer:$account, timestamp_gte:$timestamp, volume_gt:0}
+        ) {
+          referralCode
+          volume
+          liquidityVolume
+          trades
+          mints
+          tradedReferralsCount
+          mintedReferralsCount
+          registeredReferralsCount
+          totalRebateUsd
+          discountUsd
+          liquidityTotalRebateUsd
+        }
+      }
+    `;
+
+    const client = getGraphClient(chainId);
+    const data = await client.query({
+        query: referralDataQuery,
+        variables: {
+            account: (account || "").toLowerCase(),
+            timestamp: timestamp,
+            period: period
+        },
+    });
+
+    const referrerTotalStats = data.data.referrerTotalStats;
+
+    let totalVolume = BigNumber.from(0);
+    for(let referrerData of referrerTotalStats) {
+        totalVolume = totalVolume.add(BigNumber.from(referrerData.volume));
+    }
+
+    return totalVolume.toString();
+}
+
+
+//fetch data in frontend page 
+
+
+  useEffect(() => {
+    (async function () {
+      const data = await getLeaderBoardData(8453, "total", 0, 20);
+      setLeaderBoardData(data);
+      console.log(data);
+    })();
+  }, []);
+
+
+ 
